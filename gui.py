@@ -5,10 +5,13 @@ import queue
 from tkinter import ttk, messagebox, simpledialog
 from typing import List # Added for type hinting
 import pandas as pd # Added for OHLC data handling
-from trading import Trader  # adjust import path if needed
+from trading import Trader, AiAdvice # adjust import path if needed
 from strategies import (
     SafeStrategy, ModerateStrategy, AggressiveStrategy,
     MomentumStrategy, MeanReversionStrategy
+)
+from indicators import (
+    calculate_ema, calculate_atr, calculate_rsi, calculate_adx
 )
 
 class MainApplication(tk.Tk):
@@ -298,15 +301,19 @@ class TradingPage(ttk.Frame):
         self.data_readiness_label = ttk.Label(self, textvariable=self.data_readiness_var)
         self.data_readiness_label.grid(row=9, column=1, sticky="ew", pady=(10,0))
 
+        # ChatGPT Analysis Button
+        self.ai_button = ttk.Button(self, text="ChatGPT Analysis", command=self.run_chatgpt_analysis)
+        self.ai_button.grid(row=10, column=0, columnspan=2, pady=(10, 0))
+
         # Start/Stop Scalping buttons
         self.start_button = ttk.Button(self, text="Begin Scalping", command=self.start_scalping, state="normal") # Initially disabled
-        self.start_button.grid(row=10, column=0, columnspan=2, pady=(10,0))
+        self.start_button.grid(row=11, column=0, columnspan=2, pady=(10,0))
         self.stop_button  = ttk.Button(self, text="Stop Scalping", command=self.stop_scalping, state="disabled")
-        self.stop_button.grid(row=11, column=0, columnspan=2, pady=(5,0))
+        self.stop_button.grid(row=12, column=0, columnspan=2, pady=(5,0))
 
         # Session Stats frame
         stats = ttk.Labelframe(self, text="Session Stats", padding=10)
-        stats.grid(row=12, column=0, columnspan=2, sticky="ew", pady=(10,0))
+        stats.grid(row=13, column=0, columnspan=2, sticky="ew", pady=(10,0))
         stats.columnconfigure(1, weight=1)
 
         self.pnl_var       = tk.StringVar(value="0.00")
@@ -471,6 +478,84 @@ class TradingPage(ttk.Frame):
             self.price_var.set("ERR")
             self._log(f"Error fetching price: {e}")
 
+    def run_chatgpt_analysis(self):
+        """Initiates the AI analysis in a separate thread to avoid freezing the GUI."""
+        self._log("Requesting ChatGPT Analysis...")
+        self.ai_button.config(state="disabled")
+
+        analysis_thread = threading.Thread(target=self._chatgpt_analysis_thread, daemon=True)
+        analysis_thread.start()
+
+    def _chatgpt_analysis_thread(self):
+        """The actual logic that runs in a thread for AI analysis."""
+        try:
+            # 1. Gather data
+            symbol = self.symbol_var.get().replace("/", "")
+            price = self.trader.get_market_price(symbol)
+            ohlc_1m_df = self.trader.ohlc_history.get('1m', pd.DataFrame())
+
+            if price is None or ohlc_1m_df.empty:
+                self._ui_queue.put((self._show_ai_error, ("Could not perform analysis: Market data is missing.",)))
+                return
+
+            # 2. Calculate all required indicators
+            # Using default periods from the C# script for this manual analysis
+            fast_ema = calculate_ema(ohlc_1m_df, 9).iloc[-1]
+            slow_ema = calculate_ema(ohlc_1m_df, 21).iloc[-1]
+            rsi = calculate_rsi(ohlc_1m_df, 14).iloc[-1]
+            atr = calculate_atr(ohlc_1m_df, 14).iloc[-1]
+            adx_df = calculate_adx(ohlc_1m_df, 14)
+            adx = adx_df[f'ADX_14'].iloc[-1] if not adx_df.empty else 0
+
+            # 3. Construct payload dictionaries
+            features = {
+                "price_bid": price,
+                "ema_fast": fast_ema,
+                "ema_slow": slow_ema,
+                "rsi": rsi,
+                "adx": adx,
+                "atr": atr,
+                "spread_pips": 0 # Not easily available here, sending 0
+            }
+            bot_proposal = {
+                "side": "n/a", # No bot proposal for manual analysis
+                "sl_pips": self.sl_var.get(),
+                "tp_pips": self.tp_var.get()
+            }
+
+            # 4. Call the trader's AI advice method
+            # We assume 'long' intent for manual analysis; the AI should evaluate based on features regardless
+            advice = self.trader.get_ai_advice(intent="long", features=features, bot_proposal=bot_proposal)
+
+            # 5. Queue the result for display on the main thread
+            if advice:
+                self._ui_queue.put((self._show_ai_advice, (advice,)))
+            else:
+                self._ui_queue.put((self._show_ai_error, ("Failed to get advice from the AI Overseer.",)))
+
+        except Exception as e:
+            self._ui_queue.put((self._show_ai_error, (f"An error occurred during analysis: {e}",)))
+        finally:
+            # Re-enable the button via the UI queue
+            self._ui_queue.put((lambda: self.ai_button.config(state="normal"), ()))
+
+    def _show_ai_advice(self, advice: AiAdvice):
+        """Displays the AI advice in a messagebox. Runs on the main UI thread."""
+        self._log(f"ChatGPT Analysis Result: {advice.action.upper()} (Conf: {advice.confidence:.2%}) - {advice.reason}")
+        messagebox.showinfo(
+            "ChatGPT Analysis",
+            f"Direction: {advice.action.upper()}\n"
+            f"Confidence: {advice.confidence:.2%}\n\n"
+            f"Reason: {advice.reason}\n\n"
+            f"(Proposed SL/TP: {advice.sl_pips} / {advice.tp_pips} pips)"
+        )
+
+    def _show_ai_error(self, message: str):
+        """Displays an AI-related error in a messagebox."""
+        self._log(f"ChatGPT Analysis Error: {message}")
+        messagebox.showerror("ChatGPT Analysis Failed", message)
+
+
     def start_scalping(self):
         self._log("start_scalping() called")
 
@@ -615,7 +700,7 @@ class TradingPage(ttk.Frame):
                 'current_equity': self.trader.equity,
                 'pip_position': None,
                 'current_price_tick': current_tick_price
-            })
+            }, self.trader)
 
             print(f"Strategy decision: {action_details}")
 
