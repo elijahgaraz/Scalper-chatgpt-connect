@@ -34,9 +34,20 @@ class GeneralSettings:
     # Add other general app settings here if any
 
 @dataclass
+class AISettings:
+    """Settings for the AI Overseer integration."""
+    use_ai_overseer: bool = False
+    advisor_url: Optional[str] = None
+    advisor_auth_token: Optional[str] = None
+    advisor_timeout_ms: int = 7000
+    advisor_min_confidence: float = 0.65
+
+
+@dataclass
 class Settings:
     openapi: OpenAPISettings
     general: GeneralSettings
+    ai: AISettings
 
     @staticmethod
     def load(path: str = "config.json") -> "Settings":
@@ -56,6 +67,7 @@ class Settings:
 
         openapi_cfg = cfg_data.get("openapi", {})
         general_cfg = cfg_data.get("general", {})
+        ai_cfg = cfg_data.get("ai", {})
 
         # Prioritize env vars for secrets, then config file, then None
         client_id = env_client_id if env_client_id else openapi_cfg.get("client_id")
@@ -84,7 +96,15 @@ class Settings:
             batch_profit_target=general_cfg.get("batch_profit_target", 10.0)
         )
 
-        return Settings(openapi=openapi_settings, general=general_settings)
+        ai_settings = AISettings(
+            use_ai_overseer=ai_cfg.get("use_ai_overseer", False),
+            advisor_url=ai_cfg.get("advisor_url"),
+            advisor_auth_token=os.environ.get("ADVISOR_AUTH_TOKEN") or ai_cfg.get("advisor_auth_token"),
+            advisor_timeout_ms=ai_cfg.get("advisor_timeout_ms", 7000),
+            advisor_min_confidence=ai_cfg.get("advisor_min_confidence", 0.65)
+        )
+
+        return Settings(openapi=openapi_settings, general=general_settings, ai=ai_settings)
 
     def save(self, path: str = "config.json") -> None:
         # Create a representation of settings that is safe to save (e.g., without tokens)
@@ -114,6 +134,13 @@ class Settings:
                 "min_bars_for_trading": self.general.min_bars_for_trading,
                 "risk_percentage": self.general.risk_percentage,
                 "batch_profit_target": self.general.batch_profit_target,
+            },
+            "ai": {
+                "use_ai_overseer": self.ai.use_ai_overseer,
+                "advisor_url": self.ai.advisor_url,
+                "advisor_auth_token": self.ai.advisor_auth_token if not os.environ.get("ADVISOR_AUTH_TOKEN") else None,
+                "advisor_timeout_ms": self.ai.advisor_timeout_ms,
+                "advisor_min_confidence": self.ai.advisor_min_confidence
             }
         }
         with open(path, 'w') as f:

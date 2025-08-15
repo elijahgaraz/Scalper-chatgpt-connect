@@ -14,6 +14,16 @@ import sys
 import traceback
 import pandas as pd
 from datetime import datetime, timezone
+from dataclasses import dataclass
+
+@dataclass
+class AiAdvice:
+    """Represents the advice received from the AI Overseer."""
+    action: str
+    confidence: float
+    sl_pips: Optional[float] = None
+    tp_pips: Optional[float] = None
+    reason: Optional[str] = None
 
 TREND_BAR_PERIOD_SECONDS = {
     ProtoOATrendbarPeriod.M1: 60,
@@ -1664,6 +1674,84 @@ class Trader:
         except Exception as e:
             traceback.print_exc() # Print full traceback for debugging
             return False, f"An exception occurred while placing the order: {e}"
+
+    def get_ai_advice(self, intent: str, features: dict, bot_proposal: dict) -> Optional[AiAdvice]:
+        """
+        Sends data to the AI advisor and returns its recommendation.
+        """
+        if not self.settings.ai.use_ai_overseer or not self.settings.ai.advisor_url:
+            print("AI Overseer is disabled or URL is not configured.")
+            return None
+
+        symbol_name = self.settings.general.default_symbol
+        if not symbol_name:
+            print("Cannot get AI advice: default_symbol not set in settings.")
+            return None
+
+        payload = {
+            "pair": symbol_name.replace("/", ""),
+            "timestamp_utc": datetime.now(timezone.utc).isoformat(),
+            "timeframe": "M1", # Hardcoded as per C# example
+            "intent": intent,
+            "features": features,
+            "bot_proposal": bot_proposal
+        }
+
+        headers = {
+            "Content-Type": "application/json"
+        }
+        if self.settings.ai.advisor_auth_token:
+            headers["X-Advisor-Token"] = self.settings.ai.advisor_auth_token
+
+        timeout_seconds = self.settings.ai.advisor_timeout_ms / 1000.0
+
+        try:
+            print(f"Sending payload to AI Advisor: {json.dumps(payload, indent=2)}")
+            response = requests.post(
+                self.settings.ai.advisor_url,
+                json=payload,
+                headers=headers,
+                timeout=timeout_seconds
+            )
+            response.raise_for_status() # Raise HTTPError for bad responses (4xx or 5xx)
+
+            data = response.json()
+            print(f"Received response from AI Advisor: {data}")
+
+            # Normalize response keys (similar to C# example)
+            action = data.get("action") or data.get("direction")
+            if isinstance(action, str):
+                action = action.lower()
+                if action == "buy": action = "long"
+                if action == "sell": action = "short"
+
+            confidence = data.get("confidence")
+            if confidence is None:
+                confidence_pct = data.get("confidence_pct")
+                if confidence_pct is not None:
+                    confidence = float(confidence_pct) / 100.0
+
+            if action not in ["long", "short", "skip"] or confidence is None:
+                print(f"AI Advisor returned invalid advice: action='{action}', conf={confidence}")
+                return None
+
+            return AiAdvice(
+                action=action,
+                confidence=float(confidence),
+                sl_pips=data.get("sl_pips"),
+                tp_pips=data.get("tp_pips"),
+                reason=data.get("reason", "No reason provided.")
+            )
+
+        except requests.exceptions.Timeout:
+            print(f"AI Advisor request timed out after {timeout_seconds} seconds.")
+            return None
+        except requests.exceptions.RequestException as e:
+            print(f"Error communicating with AI Advisor: {e}")
+            return None
+        except (json.JSONDecodeError, KeyError) as e:
+            print(f"Error parsing AI Advisor response: {e}")
+            return None
             
     def _handle_execution_event(self, event: ProtoOAExecutionEvent) -> None:
         # TODO: handle executions

@@ -13,5 +13,11 @@
         "chart_update_interval_ms": 500,
         "min_bars_for_trading": 100,
         "risk_percentage": 1.0
+    },
+    "ai": {
+        "use_ai_overseer": true,
+        "advisor_url": "https://chatgpt-scalper-1.onrender.com/advice",
+        "advisor_auth_token": "Jules-AI-9876",
+        "advisor_min_confidence": 0.65
     }
 }
