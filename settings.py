@@ -41,6 +41,7 @@ class AISettings:
     advisor_auth_token: Optional[str] = None
     advisor_timeout_ms: int = 7000
     advisor_min_confidence: float = 0.65
+    ai_analysis_interval_sec: int = 300
 
 
 @dataclass
@@ -101,7 +102,8 @@ class Settings:
             advisor_url=ai_cfg.get("advisor_url"),
             advisor_auth_token=os.environ.get("ADVISOR_AUTH_TOKEN") or ai_cfg.get("advisor_auth_token"),
             advisor_timeout_ms=ai_cfg.get("advisor_timeout_ms", 7000),
-            advisor_min_confidence=ai_cfg.get("advisor_min_confidence", 0.65)
+            advisor_min_confidence=ai_cfg.get("advisor_min_confidence", 0.65),
+            ai_analysis_interval_sec=ai_cfg.get("ai_analysis_interval_sec", 300)
         )
 
         return Settings(openapi=openapi_settings, general=general_settings, ai=ai_settings)
@@ -140,7 +142,8 @@ class Settings:
                 "advisor_url": self.ai.advisor_url,
                 "advisor_auth_token": self.ai.advisor_auth_token if not os.environ.get("ADVISOR_AUTH_TOKEN") else None,
                 "advisor_timeout_ms": self.ai.advisor_timeout_ms,
-                "advisor_min_confidence": self.ai.advisor_min_confidence
+                "advisor_min_confidence": self.ai.advisor_min_confidence,
+                "ai_analysis_interval_sec": self.ai.ai_analysis_interval_sec
             }
         }
         with open(path, 'w') as f:

@@ -143,40 +143,18 @@ class SafeStrategy(Strategy):
             else:
                 sl = min(sl, (prev_close - breakeven_offset) - price)
 
-        # --- AI Overseer Integration ---
+        # --- AI Bias Gatekeeper ---
         if trader.settings.ai.use_ai_overseer and action in ('buy', 'sell'):
-            # 1. Calculate all indicators for the AI payload
-            intent = 'long' if action == 'buy' else 'short'
-            fast_ema = calculate_ema(df, 9).iloc[-1]
-            slow_ema = calculate_ema(df, 21).iloc[-1]
-            rsi = calculate_rsi(df, 14).iloc[-1]
-            adx_df = calculate_adx(df, 14)
-            adx = adx_df[f'ADX_14'].iloc[-1] if not adx_df.empty else 0
+            ai_bias = data.get('ai_bias', 'hold') # Default to hold if not provided
+            if ai_bias == 'hold':
+                return self._hold(f"Trade '{action}' blocked by AI Bias: HOLD")
+            if ai_bias == 'long' and action == 'sell':
+                return self._hold(f"Trade '{action}' blocked by AI Bias: LONG-ONLY")
+            if ai_bias == 'short' and action == 'buy':
+                return self._hold(f"Trade '{action}' blocked by AI Bias: SHORT-ONLY")
 
-            # 2. Construct payload
-            features = {
-                "price_bid": price, "ema_fast": fast_ema, "ema_slow": slow_ema,
-                "rsi": rsi, "adx": adx, "atr": atr, "spread_pips": 0
-            }
-            bot_proposal = {"side": intent, "sl_pips": sl_pips, "tp_pips": tp_pips}
-
-            # 3. Get AI advice
-            ai_advice = trader.get_ai_advice(intent, features, bot_proposal)
-
-            # 4. Act on AI advice
-            if ai_advice:
-                ai_action_map = {'long': 'buy', 'short': 'sell'}
-                if ai_advice.confidence < trader.settings.ai.advisor_min_confidence:
-                    return self._hold(f"AI confidence {ai_advice.confidence:.2%} below threshold {trader.settings.ai.advisor_min_confidence:.2%}. AI Reason: {ai_advice.reason}")
-
-                if ai_action_map.get(ai_advice.action) != action:
-                    return self._hold(f"AI action '{ai_advice.action}' contradicts strategy '{action}'. AI Reason: {ai_advice.reason}")
-
-                # If advice is good, augment the comment
-                comment += f" | AI Confirmed (Conf: {ai_advice.confidence:.2%}, Reason: {ai_advice.reason})"
-            else:
-                # If AI fails to provide advice, revert to holding for safety
-                return self._hold("AI advisor failed to provide a valid response.")
+            # If trade is allowed, augment comment
+            comment += " | AI Bias OK"
 
         return {
             'action': action,
