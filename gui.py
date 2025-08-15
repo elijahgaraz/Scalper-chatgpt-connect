@@ -222,9 +222,9 @@ class TradingPage(ttk.Frame):
 
         # configure grid
         # Adjusted row count for new account info section AND data readiness label
-        for r in range(13): # Increased range for new row + data readiness
+        for r in range(15): # Increased range for new row + data readiness
             self.rowconfigure(r, weight=0)
-        self.rowconfigure(13, weight=1) # Adjusted log row index
+        self.rowconfigure(15, weight=1) # Adjusted log row index
         self.columnconfigure(1, weight=1)
 
 
@@ -301,19 +301,24 @@ class TradingPage(ttk.Frame):
         self.data_readiness_label = ttk.Label(self, textvariable=self.data_readiness_var)
         self.data_readiness_label.grid(row=9, column=1, sticky="ew", pady=(10,0))
 
+        # AI Bias Display
+        ttk.Label(self, text="AI Bias:").grid(row=10, column=0, sticky="w", padx=(0,5), pady=(5,0))
+        self.ai_bias_label = ttk.Label(self, textvariable=self.ai_bias_var, font=("TkDefaultFont", 10, "italic"))
+        self.ai_bias_label.grid(row=10, column=1, sticky="ew", pady=(5,0))
+
         # ChatGPT Analysis Button
         self.ai_button = ttk.Button(self, text="ChatGPT Analysis", command=self.run_chatgpt_analysis)
-        self.ai_button.grid(row=10, column=0, columnspan=2, pady=(10, 0))
+        self.ai_button.grid(row=11, column=0, columnspan=2, pady=(10, 0))
 
         # Start/Stop Scalping buttons
         self.start_button = ttk.Button(self, text="Begin Scalping", command=self.start_scalping, state="normal") # Initially disabled
-        self.start_button.grid(row=11, column=0, columnspan=2, pady=(10,0))
+        self.start_button.grid(row=12, column=0, columnspan=2, pady=(10,0))
         self.stop_button  = ttk.Button(self, text="Stop Scalping", command=self.stop_scalping, state="disabled")
-        self.stop_button.grid(row=12, column=0, columnspan=2, pady=(5,0))
+        self.stop_button.grid(row=13, column=0, columnspan=2, pady=(5,0))
 
         # Session Stats frame
         stats = ttk.Labelframe(self, text="Session Stats", padding=10)
-        stats.grid(row=13, column=0, columnspan=2, sticky="ew", pady=(10,0))
+        stats.grid(row=14, column=0, columnspan=2, sticky="ew", pady=(10,0))
         stats.columnconfigure(1, weight=1)
 
         self.pnl_var       = tk.StringVar(value="0.00")
@@ -329,9 +334,9 @@ class TradingPage(ttk.Frame):
 
         # Output log
         self.output = tk.Text(self, height=8, wrap="word", state="disabled")
-        self.output.grid(row=14, column=0, columnspan=2, sticky="nsew", pady=(10,0))
+        self.output.grid(row=16, column=0, columnspan=2, sticky="nsew", pady=(10,0))
         sb = ttk.Scrollbar(self, command=self.output.yview)
-        sb.grid(row=14, column=2, sticky="ns")
+        sb.grid(row=16, column=2, sticky="ns")
         self.output.config(yscrollcommand=sb.set)
 
         # Internal counters
@@ -341,6 +346,11 @@ class TradingPage(ttk.Frame):
         self.batch_size = 5
         self.current_batch_trades = 0
         self.batch_start_equity = 0.0
+
+        # AI Bias state
+        self.last_ai_analysis_time = 0
+        self.ai_bias = "hold" # Default to hold
+        self.ai_bias_var = tk.StringVar(value="AI Bias: Not Available")
 
         # self.refresh_price() # Removed: Price will be refreshed when symbols are populated
 
@@ -644,9 +654,52 @@ class TradingPage(ttk.Frame):
 
         messagebox.showinfo("Scalping Started", f"Live scalping thread started for {symbol}")
 
+    def _update_ai_bias(self):
+        """Calls the AI advisor to get a general market bias."""
+        self._log("Updating AI market bias...")
+        # This runs in a thread, so it's safe to block
+        try:
+            # This logic is very similar to the manual analysis, but with a different intent
+            symbol = self.symbol_var.get().replace("/", "")
+            price = self.trader.get_market_price(symbol)
+            ohlc_1m_df = self.trader.ohlc_history.get('1m', pd.DataFrame())
+
+            if price is None or ohlc_1m_df.empty:
+                self._log("Could not update AI bias: market data missing.")
+                return
+
+            features = { "price_bid": price } # Can add more features if the "bias" endpoint supports them
+            bot_proposal = {"side": "n/a", "sl_pips": 0, "tp_pips": 0}
+
+            advice = self.trader.get_ai_advice(intent="analysis", features=features, bot_proposal=bot_proposal)
+
+            if advice and advice.action in ['long', 'short', 'hold']:
+                self.ai_bias = advice.action
+                self._ui_queue.put((self.ai_bias_var.set, (f"AI Bias: {self.ai_bias.upper()} (Conf: {advice.confidence:.0%})",)))
+                self._log(f"AI Bias updated to: {self.ai_bias.upper()}. Reason: {advice.reason}")
+            else:
+                self._log("Failed to update AI bias from advisor.")
+                # Optionally, default to 'hold' on failure
+                self.ai_bias = 'hold'
+                self._ui_queue.put((self.ai_bias_var.set, ("AI Bias: Unknown (Hold)",)))
+
+        except Exception as e:
+            self._log(f"Error updating AI bias: {e}")
+            self.ai_bias = 'hold'
+            self._ui_queue.put((self.ai_bias_var.set, ("AI Bias: Error (Hold)",)))
+
+
     def _scalp_loop(self, symbol: str, tp: float, sl: float, size: float, strategy_name: str, batch_target: float):
         print("SCALP LOOP STARTED")
         while self.is_scalping:
+            # Periodically update AI Bias
+            current_time = time.time()
+            interval = self.controller.settings.ai.ai_analysis_interval_sec
+            if self.controller.settings.ai.use_ai_overseer and (current_time - self.last_ai_analysis_time > interval):
+                self.last_ai_analysis_time = current_time
+                # Run bias update in a separate thread to not block the scalp loop
+                threading.Thread(target=self._update_ai_bias, daemon=True).start()
+
             # THIS IS THE KEY CHANGE: CREATE A NEW STRATEGY OBJECT IN EVERY LOOP
             if strategy_name == "Safe":
                 strategy = SafeStrategy(self.controller.settings)
@@ -699,7 +752,8 @@ class TradingPage(ttk.Frame):
                 'ohlc_15s': self.trader.ohlc_history.get('15s', pd.DataFrame()),
                 'current_equity': self.trader.equity,
                 'pip_position': None,
-                'current_price_tick': current_tick_price
+                'current_price_tick': current_tick_price,
+                'ai_bias': self.ai_bias
             }, self.trader)
 
             print(f"Strategy decision: {action_details}")
