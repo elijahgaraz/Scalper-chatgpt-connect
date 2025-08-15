@@ -1731,7 +1731,7 @@ class Trader:
                 if confidence_pct is not None:
                     confidence = float(confidence_pct) / 100.0
 
-            if action not in ["long", "short", "skip"] or confidence is None:
+            if action not in ["long", "short", "skip", "hold"] or confidence is None:
                 print(f"AI Advisor returned invalid advice: action='{action}', conf={confidence}")
                 return None
 
